@@ -1583,89 +1583,87 @@ printf("  %s✓ 高速优选 → %s%s\n", COL_GREEN, cfg.best_output_file, COL_R
 if (cfg.update_readme) write_readme(&cfg);
 
 /* ── 🛑 新增：未达标节点复测逻辑 ── */
-// 1. 统计有多少未达标的节点
-size_t slow_count = 0;
-for (i = 0; i < speed_results.count; i++) {
-    if (!speed_results.items[i].is_fast) {
-        slow_count++;
-    }
-}
-
-if (slow_count > 0) {
-    printf("\n  %s┌────────────────────────────────────────────────────────┐%s\n", COL_YELLOW, COL_RESET);
-    printf("  %s│               🔄 节点测速“复活赛”提示                  │%s\n", COL_YELLOW, COL_RESET);
-    printf("  %s├────────────────────────────────────────────────────────┤%s\n", COL_YELLOW, COL_RESET);
-    printf("  %s│ 发现共有 %zu 个节点未达到您设置的测速标准。            │%s\n", COL_WHITE, slow_count, COL_RESET);
-    printf("  %s│ 如果需要对这批未达标节点进行二次下载复测，请保持网络： │%s\n", COL_WHITE, COL_RESET);
-    printf("  %s│                                                        │%s\n", COL_WHITE, COL_RESET);
-    printf("  %s│ 👉 【按任意键】将自动对这批节点重新下载测速...         │%s\n", COL_CYAN, COL_RESET);
-    printf("  %s└────────────────────────────────────────────────────────┘%s\n", COL_YELLOW, COL_RESET);
-    
-    fflush(stdin);
-    (void)getchar();
-    printf("  %s🚀 正在对 %zu 个未达标节点进行二次复测...%s\n", COL_CYAN, slow_count, COL_RESET);
-
-    // 2. 将未达标的节点重新打包成一组新的待测候选节点
-    NodeArray retry_candidates = {0};
+    // 1. 统计有多少未达标的节点
+    size_t slow_count = 0;
     for (i = 0; i < speed_results.count; i++) {
         if (!speed_results.items[i].is_fast) {
-            if (retry_candidates.count >= retry_candidates.capacity) {
-                size_t new_cap = retry_candidates.capacity == 0 ? 128 : retry_candidates.capacity * 2;
-                Node *new_items = (Node *)realloc(retry_candidates.items, new_cap * sizeof(Node));
-                if (new_items) {
-                    retry_candidates.items = new_items;
-                    retry_capacity = new_cap; // 临时记录或直接使用扩容
-                    retry_candidates.capacity = new_cap;
-                }
-            }
-            retry_candidates.items[retry_candidates.count++] = speed_results.items[i].node;
+            slow_count++;
         }
     }
 
-    // 3. 调用原有的阶段 3 测速函数对这批节点单独重测
-    SpeedArray retry_results = {0};
-    run_speed_tests(&cfg, &retry_candidates, &retry_results);
+    if (slow_count > 0) {
+        printf("\n  %s┌────────────────────────────────────────────────────────┐%s\n", COL_YELLOW, COL_RESET);
+        printf("  %s│               🔄 节点测速“复活赛”提示                  │%s\n", COL_YELLOW, COL_RESET);
+        printf("  %s├────────────────────────────────────────────────────────┤%s\n", COL_YELLOW, COL_RESET);
+        printf("  %s│ 发现共有 %zu 个节点未达到您设置的测速标准。            │%s\n", COL_WHITE, slow_count, COL_RESET);
+        printf("  %s│ 如果需要对这批未达标节点进行二次下载复测，请保持网络： │%s\n", COL_WHITE, COL_RESET);
+        printf("  %s│                                                        │%s\n", COL_WHITE, COL_RESET);
+        printf("  %s│ 👉 【按任意键】将自动对这批节点重新下载测速...         │%s\n", COL_CYAN, COL_RESET);
+        printf("  %s└────────────────────────────────────────────────────────┘%s\n", COL_YELLOW, COL_RESET);
+        
+        fflush(stdin);
+        (void)getchar();
+        printf("  %s🚀 正在对 %zu 个未达标节点进行二次复测...%s\n", COL_CYAN, slow_count, COL_RESET);
 
-    // 4. 将复测后的更好结果更新回原本的总结果 speed_results 中
-    size_t updated_count = 0;
-    for (i = 0; i < retry_results.count; i++) {
-        const SpeedResult *rr = &retry_results.items[i];
-        // 在原总结果里找到对应的 IP 和端口
-        for (size_t j = 0; j < speed_results.count; j++) {
-            if (strcmp(speed_results.items[j].node.ip, rr->node.ip) == 0 &&
-                speed_results.items[j].node.port == rr->node.port) {
-                
-                // 如果复测速度比原来快，或者复测达到了高速标准，则更新
-                if (rr->speed_mbps > speed_results.items[j].speed_mbps || rr->is_fast) {
-                    speed_results.items[j].speed_mbps = rr->speed_mbps;
-                    speed_results.items[j].is_fast = rr->is_fast;
-                    if (rr->is_fast) updated_count++;
+        // 2. 将未达标的节点重新打包成一组新的待测候选节点（类型修正为原本的 TcpArray）
+        TcpArray retry_candidates = {0};
+        for (i = 0; i < speed_results.count; i++) {
+            if (!speed_results.items[i].is_fast) {
+                if (retry_candidates.count >= retry_candidates.capacity) {
+                    size_t new_cap = retry_candidates.capacity == 0 ? 128 : retry_candidates.capacity * 2;
+                    TcpResult *new_items = (TcpResult *)realloc(retry_candidates.items, new_cap * sizeof(TcpResult));
+                    if (new_items) {
+                        retry_candidates.items = new_items;
+                        retry_candidates.capacity = new_cap;
+                    }
                 }
-                break;
+                // 完美继承原节点的 IP、端口和地区信息
+                retry_candidates.items[retry_candidates.count].node = speed_results.items[i].node;
+                retry_candidates.items[retry_candidates.count].latency_ms = speed_results.items[i].latency_ms;
+                retry_candidates.count++;
             }
         }
+
+        // 3. 调用原有的阶段 3 测速函数（类型已完美匹配 TcpArray）
+        SpeedArray retry_results = {0};
+        run_speed_tests(&cfg, &retry_candidates, &retry_results);
+
+        // 4. 将复测后的更好结果更新回原本的总结果 speed_results 中
+        size_t updated_count = 0;
+        for (i = 0; i < retry_results.count; i++) {
+            const SpeedResult *rr = &retry_results.items[i];
+            for (size_t j = 0; j < speed_results.count; j++) {
+                if (strcmp(speed_results.items[j].node.ip, rr->node.ip) == 0 &&
+                    speed_results.items[j].node.port == rr->node.port) {
+                    
+                    if (rr->speed_mbps > speed_results.items[j].speed_mbps || rr->is_fast) {
+                        speed_results.items[j].speed_mbps = rr->speed_mbps;
+                        speed_results.items[j].is_fast = rr->is_fast;
+                        if (rr->is_fast) updated_count++;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (retry_candidates.items) free(retry_candidates.items);
+        if (retry_results.items) free(retry_results.items);
+
+        printf("  %s✓ 复测完毕！共有 %zu 个节点成功“复活”达到高速标准。%s\n", COL_GREEN, updated_count, COL_RESET);
+
+        if (speed_results.count > 0) {
+            qsort(speed_results.items, speed_results.count, sizeof(SpeedResult), cmp_speed_output);
+        }
+        
+        print_section("💾", "更新复测结果");
+        write_results(cfg.full_output_file, &speed_results, &cfg, 0);
+        printf("  %s✓ 完整结果已更新 → %s%s\n", COL_GREEN, cfg.full_output_file, COL_RESET);
+        write_results(cfg.best_output_file, &speed_results, &cfg, 1);
+        printf("  %s✓ 高速优选已更新 → %s%s\n", COL_GREEN, cfg.best_output_file, COL_RESET);
+        if (cfg.update_readme) write_readme(&cfg);
+    } else {
+        printf("  %s🎉 所有节点全部达标，无需进行复测。%s\n", COL_GREEN, COL_RESET);
     }
-
-    // 释放临时内存
-    if (retry_candidates.items) free(retry_candidates.items);
-    if (retry_results.items) free(retry_results.items);
-
-    printf("  %s✓ 复测完毕！共有 %zu 个节点成功“复活”达到高速标准。%s\n", COL_GREEN, updated_count, COL_RESET);
-
-    // 5. 重新对总结果排序，并覆盖重写最终文件
-    if (speed_results.count > 0) {
-        qsort(speed_results.items, speed_results.count, sizeof(SpeedResult), cmp_speed_output);
-    }
-    
-    print_section("💾", "更新复测结果");
-    write_results(cfg.full_output_file, &speed_results, &cfg, 0);
-    printf("  %s✓ 完整结果已更新 → %s%s\n", COL_GREEN, cfg.full_output_file, COL_RESET);
-    write_results(cfg.best_output_file, &speed_results, &cfg, 1);
-    printf("  %s✓ 高速优选已更新 → %s%s\n", COL_GREEN, cfg.best_output_file, COL_RESET);
-    if (cfg.update_readme) write_readme(&cfg);
-} else {
-    printf("  %s🎉 所有节点全部达标，无需进行复测。%s\n", COL_GREEN, COL_RESET);
-}
 
 /* ── GitHub 推送 ── */
 print_section("☁", "GitHub 推送");
