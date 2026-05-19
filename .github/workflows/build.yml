@@ -1,0 +1,22 @@
+name: 傻瓜式一键在线打包
+
+on:
+  workflow_dispatch: # 允许你随时在网页上手动点击按钮打包
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: 1. 拉取你的代码
+      uses: actions/checkout@v4
+
+    - name: 2. 微软云端服务器开始打包
+      run: |
+        gcc main.c -o cf_tester.exe -lws2_32 -lwinmm -static -O3
+
+    - name: 3. 制作下载链接
+      uses: actions/upload-artifact@v4
+      with:
+        name: 最终单文件EXE
+        path: cf_tester.exe
