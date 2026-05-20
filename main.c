@@ -672,53 +672,112 @@ static void url_decode_region(const char *src, char *dst, size_t dst_size) {
     dst[j] = '\0';
 }
 
-// 解析 VLESS 文件并清洗转换为标准的 IP:端口#地区 格式
+// ─── 新增：Base64 解码工具函数 ───
+static int base64_decode(const char *in, char *out, size_t out_size) {
+    static const int b64_inv[256] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-2,-1,-1,
+        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1
+    };
+    size_t len = strlen(in);
+    size_t i = 0, j = 0;
+    while (i < len && j + 3 < out_size) {
+        while (i < len && (in[i] == ' ' || in[i] == '\r' || in[i] == '\n' || in[i] == '\t')) i++;
+        if (i >= len) break;
+        int v1 = b64_inv[(unsigned char)in[i++]];
+        int v2 = (i < len) ? b64_inv[(unsigned char)in[i++]] : -1;
+        int v3 = (i < len) ? b64_inv[(unsigned char)in[i++]] : -1;
+        int v4 = (i < len) ? b64_inv[(unsigned char)in[i++]] : -1;
+        if (v1 < 0 || v2 < 0) break;
+        out[j++] = (char)((v1 << 2) | (v2 >> 4));
+        if (v3 == -2 || v3 < 0) break;
+        out[j++] = (char)(((v2 & 0xf) << 4) | (v3 >> 2));
+        if (v4 == -2 || v4 < 0) break;
+        out[j++] = (char)(((v3 & 0x3) << 6) | v4);
+    }
+    out[j] = '\0';
+    return (int)j;
+}
+
+// ─── 升级版：支持自动识别网页在线密文的 VLESS 转换函数 ───
 static int convert_vless_to_standard_format(const char *vless_path, const char *output_path) {
     FILE *f_in = fopen(vless_path, "rb");
-    FILE *f_out = fopen(output_path, "wb");
-    char line[4096];
-    int count = 0;
+    if (!f_in) return 0;
 
-    if (!f_in || !f_out) {
-        if (f_in) fclose(f_in);
-        if (f_out) fclose(f_out);
+    // 1. 先把下载下来的原始内容完整读入内存
+    fseek(f_in, 0, SEEK_END);
+    long f_size = ftell(f_in);
+    fseek(f_in, 0, SEEK_SET);
+    if (f_size <= 0) { fclose(f_in); return 0; }
+
+    char *raw_buf = (char *)malloc(f_size + 1);
+    if (!raw_buf) { fclose(f_in); return 0; }
+    size_t read_bytes = fread(raw_buf, 1, f_size, f_in);
+    raw_buf[read_bytes] = '\0';
+    fclose(f_in);
+
+    char *clean_raw = trim(raw_buf);
+    char *process_buf = NULL;
+
+    // 2. 自动判定：如果内容不包含 "vless://"，说明极其有可能是 Base64 加密的网页数据
+    if (strstr(clean_raw, "vless://") == NULL) {
+        size_t dec_size = f_size * 2 + 4096; // 分配足够大的解密缓冲区
+        process_buf = (char *)malloc(dec_size);
+        if (process_buf) {
+            base64_decode(clean_raw, process_buf, dec_size);
+        }
+    } else {
+        process_buf = _strdup(clean_raw);
+    }
+    free(raw_buf);
+
+    if (!process_buf || strlen(process_buf) == 0) {
+        if (process_buf) free(process_buf);
         return 0;
     }
 
-    while (fgets(line, sizeof(line), f_in)) {
+    // 3. 开始对解密/还原后的标准文本按行切分解析
+    FILE *f_out = fopen(output_path, "wb");
+    if (!f_out) { free(process_buf); return 0; }
+
+    int count = 0;
+    char *context = NULL;
+    char *line = strtok_s(process_buf, "\r\n", &context);
+
+    while (line) {
         char *p = trim(line);
-        char *at, *question, *hash;
-        char ip_port[256] = {0};
-        char region_decoded[256] = {0};
+        if (strncmp(p, "vless://", 8) == 0) {
+            char *at = strchr(p, '@');
+            if (at) {
+                at++;
+                char *question = strchr(at, '?');
+                if (question) {
+                    char ip_port[256] = {0};
+                    size_t ip_port_len = question - at;
+                    if (ip_port_len >= sizeof(ip_port)) ip_port_len = sizeof(ip_port) - 1;
+                    strncpy_s(ip_port, sizeof(ip_port), at, ip_port_len);
 
-        if (strncmp(p, "vless://", 8) != 0) continue;
+                    char region_decoded[256] = {0};
+                    char *hash = strchr(question, '#');
+                    if (hash) {
+                        hash++;
+                        rtrim_inplace(hash);
+                        url_decode_region(hash, region_decoded, sizeof(region_decoded));
+                    } else {
+                        snprintf(region_decoded, sizeof(region_decoded), "Unknown");
+                    }
 
-        at = strchr(p, '@');
-        if (!at) continue;
-        at++; 
-
-        question = strchr(at, '?');
-        if (!question) continue;
-
-        size_t ip_port_len = question - at;
-        if (ip_port_len >= sizeof(ip_port)) ip_port_len = sizeof(ip_port) - 1;
-        strncpy_s(ip_port, sizeof(ip_port), at, ip_port_len);
-
-        hash = strchr(question, '#');
-        if (hash) {
-            hash++; 
-            rtrim_inplace(hash);
-            url_decode_region(hash, region_decoded, sizeof(region_decoded));
-        } else {
-            snprintf(region_decoded, sizeof(region_decoded), "Unknown");
+                    fprintf(f_out, "%s#%s\n", ip_port, region_decoded);
+                    count++;
+                }
+            }
         }
-
-        fprintf(f_out, "%s#%s\n", ip_port, region_decoded);
-        count++;
+        line = strtok_s(NULL, "\r\n", &context);
     }
 
-    fclose(f_in);
     fclose(f_out);
+    free(process_buf);
     return count;
 }
 
@@ -758,9 +817,17 @@ static int download_input_file(const Config *cfg) {
     int extracted_count = convert_vless_to_standard_format(tmp_vless, tmp_standard);
     DeleteFileA(tmp_vless); 
 
-    if (extracted_count <= 0 || !file_exists(tmp_standard)) {
+if (extracted_count <= 0 || !file_exists(tmp_standard)) {
         DeleteFileA(tmp_standard);
-        printf("\n  %s⚠ 解析失败（未找到有效 VLESS 节点），将使用本地旧文件%s\n", COL_YELLOW, COL_RESET);
+        printf("\n  %s⚠ 解析失败（未找到有效 VLESS 节点）%s\n", COL_YELLOW, COL_RESET);
+        if (!file_exists(cfg->input_file)) {
+            printf("  %s🚨 错误：本地不存在任何历史 IP 缓存文件（%s），程序无法继续！%s\n", COL_RED, cfg->input_file, COL_RESET);
+            printf("  请检查您的订阅链接是否有效。按任意键退出程序...", COL_YELLOW);
+            fflush(stdin);
+            (void)getchar();
+            exit(1); // 安全退出，不再往下执行引发闪退
+        }
+        printf("  %s将自动加载本地旧文件继续测速...%s\n", COL_YELLOW, COL_RESET);
         return 0;
     }
     printf("%s 成功提取 %d 个节点%s\n", COL_GREEN, extracted_count, COL_RESET);
