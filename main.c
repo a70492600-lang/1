@@ -19,7 +19,7 @@
 /* ─── 测速参数 ──────────────────────────────────────────── */
 #define SPEED_DOMAIN "speed.cloudflare.com"
 #define SPEED_PATH   "/__down"
-#define SPEED_BYTES  2097152
+#define SPEED_BYTES  6291456
 
 /* ─── ANSI 颜色（Windows 10+ 虚拟终端支持） ──────────────── */
 #define COL_RESET   "\x1b[0m"
